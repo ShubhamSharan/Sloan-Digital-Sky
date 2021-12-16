@@ -1,0 +1,393 @@
+---
+title: "Sloan Digital Sky Survey DR14"
+output:
+  html_document:
+    df_print: paged
+---
+## Personal Details
+
+* By: Shubham Sharan
+* Student Number : 101084842
+* Date Finished : Dec 26th 2020
+
+## Content
+
+The data consists of 10,000 observations of space taken by the SDSS. Every observation is described by 17 feature columns and 1 class column which identifies it to be either a star, galaxy or quasar.
+
+## Libraries
+
+Here are the many libraries we will include to conduct our various analyses.
+```{r}
+suppressPackageStartupMessages({ #Comment out if needed
+  library(pheatmap)
+  library(ggplot2)
+  library(gridExtra)
+  library(GGally)
+  library(dplyr)
+  library(factoextra)
+  library(caret)
+  library(cluster)
+  library(corrplot)
+  library(stats)
+  library(pheatmap)
+  library(dbscan)
+  require(foreign)
+  require(nnet)
+  require(reshape2)
+  library(clValid)
+  library(randomForest)
+}) #Comment out if needed
+```
+## Data Exploration
+
+This is being done to get a sense of the data in hand and to make sure the data is somewhat ready to give us an understanding of the topic in hand.
+```{r}
+sloan_data <- read.csv("Skyserver_SQL2_27_2018 6_51_39 PM.csv") # LOADING THE DATA AFTER DOWNLOADING IT FROM KAGGLE
+head(sloan_data) # First 5 data points
+str(sloan_data) #Structure of the dataset and more importantly the data types
+dim(sloan_data) # Get a sense of the dimensions we are working with
+table(is.na(sloan_data)) # We know we have no missing values in any of the columns if FALSE
+unique(sloan_data$class) # Predictor Variable and we will make this into a factor later
+```
+We have our class being our 3 categories and note how we will be conducting on a non-binary classification for this dataset. We have 10000 observations with no missing values and 17 features (we will omit some during our preliminary analysis)
+
+## Preliminary Analysis
+
+The focus of the preliminary analysis is to ensure that all the features utilized are a good representation to allow us to distinguish the astronomical bodies, with respect to their classes or any features that is able to identify any trends or features that are unique to Quasars or Galaxies or Stars
+
+### Data Visualization
+
+Firstly we will start with getting an understanding how much of the data is provided for the 3 classes we will focus our clustering and classification on. Followed by using my same custom function for density plots with respect to our class as done in Assignment3, all the features are broken into 4x4 graphs for improved visibility.
+
+```{r}
+ggplot(sloan_data, aes(class, fill= class)) + geom_bar() # In the form of a bar chart
+
+plot_data_column = function (data, column) {
+     ggplot(data[2:18],aes(x=data[,column],fill=class))+geom_density(alpha=0.4)+ggtitle(column)+theme_classic()+theme(axis.text.x = element_text(angle = 20))+xlab(label = column)
+}
+
+sloan_data <- sloan_data %>% relocate(class, .after = last_col())
+
+myplots <- lapply(colnames(sloan_data), plot_data_column, data = sloan_data)
+do.call("grid.arrange", c(myplots[1:4], ncol=2))
+do.call("grid.arrange", c(myplots[5:8], ncol=2))
+do.call("grid.arrange", c(myplots[9:12], ncol=2))
+do.call("grid.arrange", c(myplots[13:16], ncol=2))
+do.call("grid.arrange", c(myplots[17:18], ncol=2))
+
+```
+
+We see some features with 3 distinct peaks (e.g. photometry data) which make them ideal for our classification taks and some where the scales with respect to classes may vary to the point where they become ideal canidates (e.g. plate). Let's start of by describing the many features.
+
+Location oriented descriptions below:
+
+* objid = Object Identifier (Doesn't add any value in the classification) each catalog object has a unique combination of run-camcol-field-id-rerun; this combination is hashed into a single 64-bit integer called ObjID. 
+* ra = J2000 Right Ascension (r-band) is the angular distance measured eastward along the celestial equator from the Sun at the March equinox to the hour circle of the point above the earth in question. 
+* dec = J2000 Declination (r-band) these astronomical coordinates specify the direction of a point on the celestial sphere (traditionally called in English the skies or the sky) in the equatorial coordinate system.
+
+ A bit about RA (Right Ascension) and Declination from my astronomy class PHYS1902 and some other features that give us a sense of how RA and Declination work.
+![You note how Right Ascension and declination is recorded](d.png "ra/dc")
+
+Features of the dataset some which pertain to the motion of the object and the some others to spectroscopic analysis: 
+
+* redshift = Final Redshift happens when light or other electromagnetic radiation from an object is increased in wavelength, or shifted to the red end of the spectrum. This is a great indicator as tell us if it moving towards or further from us and the brighter the object the easier it is for our telescopes to resolve. We will look further into this in the upcoming plots.
+
+* plate = plate number where each spectroscopic exposure employs a large, thin, circular metal plate that positions optical fibers via holes drilled at the locations of the images in the telescope focal plane. These fibers then feed into the spectrographs. Each plate has a unique serial number, which is called plate in views.
+
+* mjd = MJD of observation used to indicate the date that a given piece of SDSS data (image or spectrum) was taken. Days after November 17 1858.
+
+* fiberid = fiber ID the SDSS spectrograph uses optical fibers to direct the light at the focal plane from individual objects to the slit head. Each object is assigned a corresponding fiberID. (We will be removing all unique forms of identifiers as these are not continous data points more so should be treated like a class feaatures)
+
+```{r}
+ggplot(sloan_data, aes(x=ra, y=dec, shape=class, color=class)) +
+  geom_point()
+
+ggplot(sloan_data[sloan_data$class=="STAR",], aes(x=ra, y=dec, shape=class, color=redshift, size = redshift)) +
+  geom_point()
+
+# NOTE HOW SOME OF THE STARS ARE ACTUALLY BLUE SHIFTED AND NOT RED SHIFTED
+ggplot(sloan_data[sloan_data$class=="QSO",], aes(x=ra, y=dec, shape=class, color=redshift, size = redshift)) +
+  geom_point()
+
+ggplot(sloan_data[sloan_data$class=="GALAXY",], aes(x=ra, y=dec, shape=class, color=redshift, size = redshift)) +
+  geom_point()
+
+#NOTE HOW THE REDSHIFTS DIFFER BETWEEN THE CLASSES
+ggplot(sloan_data, aes(x=class, y=redshift, shape=class, color=class)) +
+  geom_boxplot() + facet_wrap(~class, scale="free")
+```
+
+The scale of the many box plots drastically differ, from which we can conclude that this will be a good candidate when focusing on classification and identifying suitable clusters.
+```{r}
+c <- cor(sloan_data[1:17],method="pearson")
+corrplot(c, tl.cex=0.8,tl.col = "black")
+unique(sloan_data$objid)
+unique(sloan_data$rerun)
+```
+
+From this corrplot we see a lot of interactions between the five-band (u, g, r, i, z) CCD-based photometry and a few in the redshift and mjd. Even though some of the unique identifiers show correlation but is not relevant as if they were decided on the basis of the class then we shouldn't include it as it may tamper with our results (e.g. naming conventions for starts is different than quasars or galaxies). If it has nothing to do with the class then it has no value as it is more arbitrary, some unique identifiers are concatenation of multiple columns which still has no value. The question marks tell us that there is only one unique instance of that data point and has no value in the overall analysis. Let's look at some more features which really don't interact with each other that much.
+
+Run, rerun, camcol and field are features which describe a field within an image taken by the SDSS. A field is basically a part of the entire image corresponding to 2048 by 1489 pixels. A field can be identified by:
+
+* run = Run Number which identifies the specific scan
+* rereun = Rerun Number, specifies how the image was processed.(Only has one value throughout the data).
+* camcol = Camera column a number from 1 to 6, identifying the scanline within the run, and the field number
+* field = Field number typically starts at 11 (after an initial ramp up time), and can be as large as 800 for particularly long runs.
+
+These features may not have much predictive power when it comes to identifying the class and was evident in the density plots and corrplots. It's also cause these focus more on the imaging method as compared to the attributes that contribute to a specific class.
+
+specobjid = Object Identifier # This as well being a unique identifier adds any value to the overall analysis.
+class = object class (galaxy, star or quasar object)
+
+```{r}
+# Remove all or any unique identifiers
+uids <- c('objid','specobjid','fiberid')
+sloan_data_clean <- sloan_data %>% select(-one_of(uids))
+
+imgdescriptors <- c('run','rerun','camcol','field')
+sloan_data_clean <- sloan_data_clean %>% select(-one_of(imgdescriptors ))
+dim(sloan_data_clean)
+
+c <- cor(sloan_data_clean[1:10],method="pearson")
+corrplot(c, tl.cex=0.8,tl.col = "black")
+```
+
+In this preliminary plotting we realize that many of the features have no properties which help us distinguish one from the other. The five-band (u, g, r, i, z) CCD-based photometry seems to be a good indicator as we see three individual peaks.
+```{r}
+uids <- c('u', 'g', 'r', 'i', 'z','class')
+fiveband <- sloan_data_clean %>% select(one_of(uids))
+
+ggpairs(fiveband[1:5], title="The five-band (u, g, r, i, z) CCD-based photometry",message=FALSE,progress=FALSE,  mapping=ggplot2::aes(colour = as.factor(sloan_data_clean$class)), lower = list(continuous = wrap("smooth", alpha = 0.3, size=0.1)), upper = list( continuous = wrap("cor", size=3, alpha=0.3)))
+```
+
+Here we see 3 clear distinct peaks and linear nature between the interactions terms which signify that the variables are correlated with one another and this was also evident in the corrplot. 
+
+Topic of redshifts was shown how the scale for the 3 different classes varies to signify that it is a good class indicator. Some of the other features show interactions with one another therefore, we decide to keep these and see how it impacts our model.
+
+```{r}
+extrafeats <- c('ra', 'dec', 'redshift', 'plate','mjd','class')
+loc <- sloan_data_clean %>% select(one_of(extrafeats))
+
+#PAIRPLOT : To see feature interactions between Location, movement of spectroscopic features and more
+ggpairs(loc[1:5], title="Location, movement of body and more ",message=FALSE,progress=FALSE,  mapping=ggplot2::aes(colour = as.factor(sloan_data_clean$class)), lower = list(continuous = wrap("points", alpha = 0.3, size=0.1)), upper = list( continuous = wrap("cor", size=2, alpha=0.3)))
+```
+
+This is informative by showing some of the interaction between the motion and position of the planet, along with some other spectroscopic features. Redshift we see a clear distinction that is not as visible in the density plots before and now. mjd being a date is a positive correlation and we see more blue which pertains to stars in left more side which could be a sign of how are telescopes have been improving the larger the mjd the more recent the data was collected, as stars are much smaller then a entire quasar or galaxy and is much harder to resolve. 
+
+### Principal Component Analysis
+PCA Analysis on entire dataset, just to get a sense of how much variance is being explained by x dimensions?
+```{r}
+colnames(sloan_data_clean[1:10])
+summary(space_pc0 <- prcomp(scale(sloan_data_clean[1:10]))) #SCALED
+screeplot(space_pc0, type = "line", main = "Screeplot of all the PCs") # Much of the variation is explained by the first 5 PC's
+```
+
+This PCA shows that all of the variance can be explained by the first 5 PC's after scaling. Since we don't want to reduce the dimensions just 5 we shall just reduce the dimensions of the highly correlated photometry data of 5 dimensions. 
+
+Here we will take photometry data of 5 dimensions to an appropriate number of principal components to see how much of the variation can be explained by fewer dimensions. 
+
+```{r}
+X_data <- scale(fiveband[1:5]) #Scaling the data is not needed here makes marginal improvement
+y_data <- fiveband$class
+(colnames(X_data)) # The column names tells me the names of all the features in data set.
+space_pc <- prcomp(X_data) # PCA Analysis
+summary(space_pc)
+screeplot(space_pc, type = "line", main = "Screeplot of all the PCs")
+rotation <- as.matrix(space_pc$rotation) # This gives us a good sense of which features are being contribute to the PC
+pheatmap(rotation,fontsize = 8,cellheight = 7.18,   cluster_cols = FALSE,display_numbers	= TRUE, cluster_rows = FALSE) # The closer it is to -1 or 1 the higher the contribution.
+```
+
+The five-band (u, g, r, i, z) CCD-based photometry's first 2 principal components can be explained by 99% plus and we can incorporate the other features as it is! We will make use of values from loc (7 features) + space_pc (2 Principal Components) features for our final model to focus on the classification.
+
+```{r}
+temp <- cbind(scale(loc[1:5]),loc[6]) #SCALED OTHER Features
+sloan_space <- cbind(space_pc$x[,1:2],temp)
+cat('Data Dimensions Summary----------------------------------\n\n',"ORGINAL DATA MODEL   : ",dim(sloan_data),"\n","PCA MODEL            : ",dim(space_pc$x[,1:2]),"\n","Extra features MODEL : ",dim(loc),"\n","ORGINAL DATA MODEL   : ",dim(sloan_space),"\n","We have reduced the number of features by more then half as of now!")
+head(sloan_space) # This dataset is what we will be using which has all the features scaled appropriately.
+```
+
+ In this preliminary analysis we focused on dimension reductions but not row data reductions as all there were no missing values, and there are no signs which indicate the data points are off and bad. However, we did do some column data reductions as some features were not nessecary and other features were transformed with the aid of PCA to preserve the variance. 
+
+## Unsupervised Learning
+### K means Clusterings
+
+When we scale the data for k means the unequal variances leads to us putting more weight on variables that have a smaller variance so to mitigate that we will be working with scaled data throughout.
+
+```{r}
+(colnames(sloan_space[1:7]))
+sloan_x_data <- sloan_space[1:7]
+sloan_y_data <- sloan_space$class
+
+ss <- sapply(1:10, function(k){kmeans(sloan_x_data, k, nstart=100, iter.max = 10 )$tot.withinss}) # The elbow method
+plot(1:10, ss, type="b", pch = 19,xlab="# of clusters ", ylab="Total within the clusters' sum of squares") # The total within sum of squares is measuring how compact the clusters are and we are going to want to minimize that to a certain degree.
+abline(v=3, lwd=1.5, lty=4)
+k <- kmeans(sloan_x_data, 3)
+(table(k$cluster,as.factor(sloan_y_data)))
+
+(colnames(sloan_space[1:4]))
+sloan_x_data2 <- sloan_space[1:4]
+k <- kmeans(sloan_x_data2, 3)
+(table(k$cluster,as.factor(sloan_y_data)))
+
+```
+
+
+```{r}
+p <- fviz_cluster(k, data = sloan_x_data,geom = "point") + ggtitle("No elipse")
+pe <- fviz_cluster(k, data = sloan_x_data,geom = "point",ellipse.type = "norm") + ggtitle("Elipse")
+grid.arrange(p, pe, ncol = 2)
+```
+
+There is a significant amount of overlap in the three clusters which is not a good sign. In the confusion matrix we note that not each column has a max value in 3 separate rows which is not a good indicator.
+
+### Heirarchal Clustering
+
+This is the bonus unsupervised technique we will focus on to see how it compares to the kmeans unsupervised technique in being able to identify clusters.
+```{r}
+clusters <- hclust(dist(sloan_x_data[,1:2]))
+plot(clusters) # hard to interpret
+treeforthree1 <- cutree(clusters,3)
+
+clusters <- hclust(dist(sloan_x_data[,1:4]))
+# plot(clusters) # hard to interpret
+treeforthree2 <- cutree(clusters,3)
+
+clusters <- hclust(dist(sloan_x_data))
+# plot(clusters) # hard to interpret
+treeforthree3 <- cutree(clusters,3)
+
+
+table(sloan_y_data)
+table(treeforthree1, as.factor(sloan_y_data))
+table(treeforthree2, as.factor(sloan_y_data))
+table(treeforthree3, as.factor(sloan_y_data))
+# We will not be using confusion matrices as it is not easy to identify which cluster is allocated to which but the more values we see one large value in each row column combinations and if we see a one of these large values in each row it's a good sign all we would be having is some misclassification which is expected. This is not a way to validate unsupervised techniques but is more so for supervised learning techniques.
+#confusionMatrix((as.factor(treeforthree1)),as.factor(as.integer(as.factor(sloan_y_data))))
+#confusionMatrix((as.factor(treeforthree2)),as.factor(as.integer(as.factor(sloan_y_data))))
+#confusionMatrix((as.factor(treeforthree3)),as.factor(as.integer(as.factor(sloan_y_data))))
+```
+```{r}
+a <- fviz_cluster(list(data = sloan_x_data, cluster = treeforthree1,ellipse.type = "norm")) + ggtitle("No elipse")
+b <- fviz_cluster(list(data = sloan_x_data, cluster = treeforthree2,ellipse.type = "norm")) + ggtitle("No elipse")
+grid.arrange(a, b, ncol = 2)
+fviz_cluster(list(data = sloan_x_data, cluster = treeforthree3,ellipse.type = "norm")) + ggtitle("No elipse")
+```
+
+It's fair to conclude that heirarchal clustering didn't do a great job as we have a lot of overlap in the cluster maps but also if we look at the confusion matrices we note that it is starting to generalize the data into less than 2 clusters almost, which is not a good sign. K means was much better approach as compared to the heirarchal clustering techniques as there is less overlap but both are not good enough to accurately identify quasars from galaxies or stars. The next approach would be to train some models in a supervised manner. These parametric unsupervised learning techniques didn't bring too much insight to the table. If we are able to visualise the data in higher dimensions we would be able to see the segregation with more detail.
+
+## Supervised Learning
+
+### Train Test Split
+
+We will be doing a 75/25 split on the data with our custom seed, to ensure replicability.
+```{r}
+sloan_x_data <- sloan_space[1:7]
+sloan_y_data <- sloan_space[8]
+
+set.seed(4601) # ;)
+# A good 75/25 train test split
+train_index <- sample(1:nrow(sloan_x_data), 0.75 * nrow(sloan_x_data))
+test_index <- setdiff(1:nrow(sloan_x_data), train_index)
+
+X_train <- sloan_x_data[train_index,]
+y_train <- sloan_y_data[train_index,]
+class <- y_train
+train <- cbind(X_train,class)
+dim(X_train)
+length(y_train)
+
+#-------------------------------------------------------------------------
+X_test <- sloan_x_data[test_index,]
+y_test<- sloan_y_data[test_index,]
+class <- y_test
+test <- cbind(X_test,class)
+
+dim(X_test)
+length(y_test)
+```
+
+### Multinomial Logistic Regression
+
+Since this is a non-binary classification we will have to use multinomial logistic regression instead of simple logistic regression which is binary in nature.
+```{r}
+(train)
+multilog <- multinom(class ~ PC1+PC2+redshift, data = train )
+summary(multilog)
+```
+
+```{r}
+train_pred <- predict(multilog, newdata = train, "class")
+tbl <- table(train$class, train_pred)# Classification table
+
+test_pred <- predict(multilog, newdata = test, "class")
+tebl <- table(test$class, test_pred) # Classification table
+cat("TRAIN ACCURACY : ", round((sum(diag(tbl))/sum(tbl))*100,2),"% \n","TEST ACCURACY  : ",round((sum(diag(tebl))/sum(tebl))*100,2),"% \n") # Accuracy is tested by summing the diagonal and dividing it by total obs.
+```
+
+Let's see if we can improve this
+```{r}
+multilog2 <- multinom(class ~ ., data = train )
+summary(multilog2)
+```
+
+```{r}
+train_pred <- predict(multilog2, newdata = train, "class")
+tbl2 <- table(train$class, train_pred) # Classification table
+
+test_pred <- predict(multilog2, newdata = test, "class")
+tebl2 <- table(test$class, test_pred) # Classification table
+
+cat("TRAIN ACCURACY  : ",round((sum(diag(tbl2))/sum(tbl2))*100,2),"% \n", "TEST ACCURACY  : ",round((sum(diag(tebl2))/sum(tebl2))*100,2),"% \n") # Accuracy
+
+#From previous model
+#TRAIN ACCURACY :  98.67 % 
+#TEST ACCURACY  :  98.56 % 
+```
+
+The train and test accuracy both rise by a small margin, so this means that the photometry data and redshift is enough to classify the data with good accuracy. Other features still contribute to the model. So to have a good understanding of what features are most relevant we will do some analysis in our next supervised learning algorithm called Randome Forest which has a unique plot which should help us see what features are most relevant in the classification
+
+```{r}
+cat("SUMMARY----------------------------------------\n\nModel 1: \n")
+(tbl)
+(tebl)
+cat("\nModel 2: \n")
+(tbl2)
+(tebl2)
+head(prob_table <- fitted(multilog2)) # The highest probability is the one that the class indicator is identified.
+```
+
+### Random Forest Classification
+
+```{r}
+?randomForest
+train$class <- factor(train$class) # Was not working without this fix.
+#Should importance of predictors be assessed? YES
+#Number of trees to grow. This should not be set to too small a number, to ensure that every input row gets predicted at least a few times.
+(rf <- randomForest(formula = class ~ ., data=train, ntree=100, importance=TRUE, proximity=TRUE))
+```
+
+The out of bag error estimate is really small which means much of the data was correctly classified. The next 2 confusion matrices focus more on data that the model was trained on and the data the model has never seen, making it the more interesting one to inspect and usually will be the one with poor accuracy as compared to the predictions made on the data that the model was trained on.
+```{r}
+pred <- predict(rf,X_train)
+(tb1 <- table(observed=train$class,predicted=pred))
+
+pred <- predict(rf,X_test)
+(tb2 <- table(observed=test$class,predicted=pred))
+```
+Here we see that the 3 most important features which intuitively from my understanding of the subject and as tested as the first model of the multinomial logistic regression models seem to be much more important in being able to classify the 3 classes appropriately. 
+
+```{r}
+cat("TRAIN ACCURACY  : ",round((sum(diag(tb1))/sum(tb1))*100,2),"% \n","TEST ACCURACY  : ",round((sum(diag(tb2))/sum(tb2))*100,2),"% \n") # Accuracy
+```
+
+We see really good train accuracy but the more important one being the test is better than the multinomial regression models by a very small margin. 
+
+```{r}
+varImpPlot(rf) #Dotchart of variable importance as measured by a Random Forest
+```
+
+In this plot we see how redshift, PCA1 and PC2 are some of the more important features which help us distinguish between our classes as hypothesized in our multinomial logistic regression models due to minimum change in accuracy when all the other features were included. Cause the first graph of "Mean Decrease in Accuracy" is the number of observations that are incorrectly classified by removing the feature from the model used in the random forest, which means the larger the value on the x axis the greater the impact it will have on the model. But in the other graph the higher Mean Decrease in Gini indicates higher the value on the x axis the higher the importance, so yes redshift is still important but plate and mjd seem more relevant than PC1 and PC2. The Mean Decrease in Gini measure is more so to do with how important a variable is in estimating the value of our class variable across all trees that make up our forest. 
+
+## Conclusion
+
+We saw that the unsupervised techniques were not able to able distinguish our space bodies with great accuracy and might need additional hyperparamter tuning for any improvements. We see that redshift and photometry data are good enough to help us classify the space objects. The spectroscopic data and location data didn't bring the same amount of value. mjd however had an interesting trend of finding fainter objects in the later end (closer to the present date) as technologies improved for us to better resolve fainter objects we can see in our observable universe. We also noted a drastic variation in the redshifts which could be due to the fact that the stars observed are much closer to us then the quasars and galaxies observed.
