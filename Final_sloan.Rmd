@@ -7,7 +7,6 @@ output:
 ## Personal Details
 
 * By: Shubham Sharan
-* Student Number : 101084842
 * Date Finished : Dec 26th 2020
 
 ## Content
